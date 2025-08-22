@@ -141,16 +141,24 @@ export default function C3AthleteTracker() {
   const [showCreateTeam, setShowCreateTeam] = useState<boolean>(false);
   const [newTeam, setNewTeam] = useState({ name: "", sport: "", description: "" });
 
-  // Add these new state variables here:
+  // Progress tracking state
   const [showProgressModal, setShowProgressModal] = useState<boolean>(false);
   const [progressTarget, setProgressTarget] = useState<ProgressTarget | null>(null);
   const [dailyProgress, setDailyProgress] = useState<number>(0);
   const [progressNotes, setProgressNotes] = useState<string>("");
 
+  // NEW: Team logo and join team state
+  const [showTeamSettings, setShowTeamSettings] = useState<boolean>(false);
+  const [logoUrl, setLogoUrl] = useState<string>("");
+  const [showJoinTeam, setShowJoinTeam] = useState<boolean>(false);
+  const [joinTeamCode, setJoinTeamCode] = useState<string>("");
+  const [availableTeams, setAvailableTeams] = useState<Team[]>([]);
+
   // Load initial data and check auth state
   useEffect(() => {
     loadInitialData();
     checkAuthState();
+    loadAvailableTeams();
   }, []);
 
   const loadInitialData = async () => {
@@ -310,6 +318,115 @@ export default function C3AthleteTracker() {
 
     } catch (error) {
       console.error('Error loading team data:', error);
+    }
+  };
+
+  // NEW: Team code generation and join functions
+  const generateTeamCode = (teamName: string, teamId: string): string => {
+    return `${teamName.substring(0, 3).toUpperCase()}${teamId.substring(0, 4)}`;
+  };
+
+  const loadAvailableTeams = async () => {
+    try {
+      const { data: teamsData } = await supabase
+        .from('teams')
+        .select('id, name, sport, description, max_athletes')
+        .order('name');
+      
+      if (teamsData) {
+        setAvailableTeams(teamsData);
+      }
+    } catch (error) {
+      console.error('Error loading available teams:', error);
+    }
+  };
+
+  const joinTeam = async (teamId: string) => {
+    if (!currentUser) return;
+    
+    setLoading(true);
+    try {
+      const { data: existingMember } = await supabase
+        .from('team_members')
+        .select('id')
+        .eq('user_id', currentUser.id)
+        .eq('team_id', teamId)
+        .single();
+      
+      if (existingMember) {
+        alert('You are already a member of this team!');
+        return;
+      }
+      
+      const { error } = await supabase
+        .from('team_members')
+        .insert([{
+          team_id: teamId,
+          user_id: currentUser.id,
+          role: 'athlete'
+        }]);
+      
+      if (error) {
+        alert('Error joining team: ' + error.message);
+        return;
+      }
+      
+      await loadUserTeams(currentUser.id);
+      setShowJoinTeam(false);
+      alert('Successfully joined the team!');
+      
+    } catch (error) {
+      alert('Error joining team: ' + (error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const joinTeamByCode = async () => {
+    if (!joinTeamCode.trim()) {
+      alert('Please enter a team code');
+      return;
+    }
+    
+    const team = availableTeams.find(t => 
+      generateTeamCode(t.name, t.id) === joinTeamCode.toUpperCase()
+    );
+    
+    if (!team) {
+      alert('Invalid team code. Please check and try again.');
+      return;
+    }
+    
+    await joinTeam(team.id);
+  };
+
+  const updateTeamLogo = async () => {
+    if (!currentTeam || !logoUrl.trim()) {
+      alert('Please enter a logo URL');
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('teams')
+        .update({ logo_url: logoUrl.trim() })
+        .eq('id', currentTeam.id);
+      
+      if (error) {
+        alert('Error updating logo: ' + error.message);
+        return;
+      }
+      
+      setCurrentTeam(prev => prev ? { ...prev, logo_url: logoUrl.trim() } : null);
+      setShowTeamSettings(false);
+      setLogoUrl("");
+      alert('Team logo updated successfully!');
+      
+    } catch (error) {
+      alert('Error updating logo: ' + (error as Error).message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -813,7 +930,7 @@ export default function C3AthleteTracker() {
     );
   }
 
-  // Show create team if user has no teams
+  // Show create/join team if user has no teams
   if (currentUser && teams.length === 0 && currentView === "dashboard") {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -822,7 +939,63 @@ export default function C3AthleteTracker() {
             <div className="text-center mb-6">
               <Users className="w-16 h-16 text-blue-600 mx-auto mb-4" />
               <h2 className="text-2xl font-bold text-gray-900">Welcome to C³ Athlete Tracker!</h2>
-              <p className="text-gray-600 mt-2">Get started by creating your first team</p>
+              <p className="text-gray-600 mt-2">Get started by creating or joining a team</p>
+            </div>
+            
+            <div className="space-y-3">
+              {currentUser?.role === "coach" ? (
+                <button
+                  onClick={() => setShowCreateTeam(true)}
+                  className="w-full saints-primary-btn"
+                >
+                  Create New Team
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    loadAvailableTeams();
+                    setShowJoinTeam(true);
+                  }}
+                  className="w-full saints-primary-btn"
+                >
+                  Join Existing Team
+                </button>
+              )}
+              
+              {currentUser?.role === "athlete" && (
+                <button
+                  onClick={() => setShowCreateTeam(true)}
+                  className="w-full saints-secondary-btn"
+                >
+                  Create New Team
+                </button>
+              )}
+            </div>
+            
+            <div className="mt-6 text-center">
+              <button 
+                onClick={handleLogout}
+                className="text-gray-500 hover:text-gray-700 text-sm"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show create team modal
+  if (showCreateTeam) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="max-w-md w-full">
+          <div className="bg-white rounded-xl shadow-sm p-8 border border-gray-200">
+            <div className="text-center mb-6">
+              <Users className="w-16 h-16 text-blue-600 mx-auto mb-4" />
+              <h2 className="text-2xl font-bold text-gray-900">Create Your Team</h2>
+              <p className="text-gray-600 mt-2">Set up your team to get started</p>
             </div>
             
             <form onSubmit={(e) => { e.preventDefault(); createTeam(); }} className="space-y-4">
@@ -866,6 +1039,12 @@ export default function C3AthleteTracker() {
             
             <div className="mt-6 text-center">
               <button 
+                onClick={() => setShowCreateTeam(false)}
+                className="text-gray-500 hover:text-gray-700 text-sm mr-4"
+              >
+                Cancel
+              </button>
+              <button 
                 onClick={handleLogout}
                 className="text-gray-500 hover:text-gray-700 text-sm"
               >
@@ -878,26 +1057,61 @@ export default function C3AthleteTracker() {
     );
   }
 
-  // Render main dashboard (similar to before but with real data)
+  // Render main dashboard with updated navigation
   if (currentView === "dashboard" && currentUser && currentTeam) {
     return (
       <div className="min-h-screen bg-gray-50">
-        {/* Navigation */}
-        <nav className="bg-black shadow-sm border-b border-gray-300">
+        {/* Updated Navigation with Logo */}
+        <nav className="saints-nav shadow-sm border-b border-gray-300">
           <div className="container mx-auto px-4">
             <div className="flex items-center justify-between h-16">
               <div className="flex items-center space-x-4">
+                {/* Team Logo */}
+                {currentTeam?.logo_url ? (
+                  <img 
+                    src={currentTeam.logo_url} 
+                    alt={`${currentTeam.name} logo`}
+                    className="w-10 h-10 rounded-full object-cover border-2 border-yellow-400"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-yellow-400 flex items-center justify-center text-black font-bold">
+                    {currentTeam?.name.charAt(0) || 'T'}
+                  </div>
+                )}
+                
                 <h1 className="text-xl font-bold text-yellow-400">C³ Athlete Tracker</h1>
                 <span className="text-gray-400">|</span>
                 <span className="text-white">{currentTeam.name}</span>
                 <span className="text-gray-400">•</span>
                 <span className="text-gray-300 text-sm">{currentTeam.sport}</span>
+                
+                {/* Team Code Display for Coaches */}
+                {currentUser?.role === "coach" && currentTeam && (
+                  <div className="bg-yellow-400/20 px-3 py-1 rounded-lg border border-yellow-400/30">
+                    <span className="text-yellow-400 text-xs font-medium">
+                      Team Code: {generateTeamCode(currentTeam.name, currentTeam.id)}
+                    </span>
+                  </div>
+                )}
               </div>
+              
               <div className="flex items-center space-x-4">
                 <span className="text-white">Welcome, {currentUser.name}</span>
                 <span className="bg-yellow-400 text-black px-2 py-1 rounded text-xs font-bold uppercase">
                   {currentUser.role}
                 </span>
+                
+                {/* Team Settings for Coaches */}
+                {currentUser?.role === "coach" && (
+                  <button 
+                    onClick={() => setShowTeamSettings(true)}
+                    className="text-gray-300 hover:text-white"
+                    title="Team Settings"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
+                )}
+                
                 <button onClick={handleLogout} className="flex items-center space-x-2 text-gray-300 hover:text-white">
                   <LogOut className="w-4 h-4" />
                   <span>Logout</span>
@@ -1115,7 +1329,10 @@ export default function C3AthleteTracker() {
                       <span>Upload Proof</span>
                     </button>
                   )}
-                  <button className="w-full text-left p-3 hover:bg-gray-50 rounded-lg flex items-center space-x-3 transition-colors">
+                  <button 
+                    className="w-full text-left p-3 hover:bg-gray-50 rounded-lg flex items-center space-x-3 transition-colors"
+                    onClick={() => setShowTeamSettings(true)}
+                  >
                     <Settings className="w-5 h-5 text-gray-600" />
                     <span>Team Settings</span>
                   </button>
@@ -1216,6 +1433,146 @@ export default function C3AthleteTracker() {
                 >
                   {loading ? 'Submitting...' : 'Submit Proof'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* NEW: Team Settings Modal */}
+        {showTeamSettings && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold">Team Settings</h3>
+                <button onClick={() => setShowTeamSettings(false)} className="p-2 rounded hover:bg-gray-100">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Team Logo URL
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://example.com/logo.png"
+                    value={logoUrl}
+                    onChange={(e) => setLogoUrl(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Enter a URL to an image file (PNG, JPG, SVG)
+                  </p>
+                </div>
+                
+                {currentTeam?.logo_url && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Current Logo
+                    </label>
+                    <img 
+                      src={currentTeam.logo_url} 
+                      alt="Current team logo"
+                      className="w-16 h-16 rounded-lg object-cover border border-gray-300"
+                    />
+                  </div>
+                )}
+                
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <h4 className="font-medium text-blue-900 mb-2">Team Join Code</h4>
+                  <p className="text-sm text-blue-700 mb-2">
+                    Athletes can use this code to join your team:
+                  </p>
+                  <div className="bg-white px-3 py-2 rounded border font-mono text-lg text-center">
+                    {generateTeamCode(currentTeam?.name || '', currentTeam?.id || '')}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-6 flex justify-end gap-2">
+                <button 
+                  onClick={() => setShowTeamSettings(false)} 
+                  className="px-4 py-2 rounded border border-gray-300 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={updateTeamLogo}
+                  disabled={loading}
+                  className="saints-primary-btn disabled:opacity-50"
+                >
+                  {loading ? 'Updating...' : 'Update Logo'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* NEW: Join Team Modal */}
+        {showJoinTeam && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-6 max-h-[80vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold">Join a Team</h3>
+                <button onClick={() => setShowJoinTeam(false)} className="p-2 rounded hover:bg-gray-100">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              {/* Join by Code */}
+              <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+                <h4 className="font-medium text-blue-900 mb-2">Join by Team Code</h4>
+                <p className="text-sm text-blue-700 mb-3">
+                  Enter the team code provided by your coach
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g., SAI1A2B"
+                    value={joinTeamCode}
+                    onChange={(e) => setJoinTeamCode(e.target.value.toUpperCase())}
+                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                    maxLength={7}
+                  />
+                  <button 
+                    onClick={joinTeamByCode}
+                    disabled={loading}
+                    className="saints-primary-btn disabled:opacity-50"
+                  >
+                    {loading ? 'Joining...' : 'Join'}
+                  </button>
+                </div>
+              </div>
+              
+              {/* Browse Teams */}
+              <div>
+                <h4 className="font-medium text-gray-900 mb-3">Or Browse Available Teams</h4>
+                <div className="space-y-3 max-h-60 overflow-y-auto">
+                  {availableTeams.map((team) => (
+                    <div key={team.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h5 className="font-medium text-gray-900">{team.name}</h5>
+                          <p className="text-sm text-gray-600">{team.sport}</p>
+                          {team.description && (
+                            <p className="text-xs text-gray-500 mt-1">{team.description}</p>
+                          )}
+                          <p className="text-xs text-blue-600 mt-1 font-mono">
+                            Code: {generateTeamCode(team.name, team.id)}
+                          </p>
+                        </div>
+                        <button 
+                          onClick={() => joinTeam(team.id)}
+                          disabled={loading}
+                          className="saints-secondary-btn disabled:opacity-50 text-sm"
+                        >
+                          Join
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>

@@ -20,6 +20,7 @@ export interface Team {
   coach_id: string;
   subscription_tier: SubscriptionTier;
   max_athletes: number;
+  logo_url?: string;          // Added for team logo
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +41,8 @@ export interface Task {
   team_id: string;
   assigned_by: string;
   due_date?: string;
+  target_value?: number;        // Added for progress tracking
+  progress_unit?: string;       // Added for progress tracking (e.g., "miles", "reps", "minutes")
   is_active: boolean;
   created_at: string;
   updated_at: string;
